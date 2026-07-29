@@ -27,6 +27,7 @@ The broader goal is to support experiments on synthetic digital elevation models
 .
 ├── index.html                   # Main GitHub Pages website
 ├── streams.html                 # Stream visualization page, older version
+├── terrain.html                 # Terrain 3D interactive rendered page, just the DEM rendered
 ├── terrain_slider_app.jl        # Julia/Makie terrain slider application
 ├── fig_stream_matrix.jl         # Figure generation script
 ├── Project.toml                 # Julia package environment
