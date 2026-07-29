@@ -25,11 +25,9 @@ The broader goal is to support experiments on synthetic digital elevation models
 
 ```text
 .
-├── index.html                  # Main GitHub Pages website
-├── Terrain_slider.html          # Browser terrain slider demo, if kept separately
-├── streams.html                 # Stream visualization page, if included
+├── index.html                   # Main GitHub Pages website
+├── streams.html                 # Stream visualization page, older version
 ├── terrain_slider_app.jl        # Julia/Makie terrain slider application
-├── terrain_streams.jl           # Julia stream/terrain analysis script
 ├── fig_stream_matrix.jl         # Figure generation script
 ├── Project.toml                 # Julia package environment
 ├── Manifest.toml                # Exact Julia package versions
