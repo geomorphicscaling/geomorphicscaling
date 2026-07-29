@@ -1,0 +1,978 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+<title>Terrain — drainage network analysis</title>
+<style>
+  :root{
+    --bg:#0e1318; --panel:#151d24; --panel2:#1b242d; --line:#27333d;
+    --ink:#e8edf1; --muted:#8493a0; --faint:#5a6772;
+    --accent:#e8a24a; --accent-dim:#7d5a2a; --blue:#3b82e8; --red:#c2544d;
+    --mono:ui-monospace,"JetBrains Mono","SF Mono",Menlo,Consolas,monospace;
+    --sans:ui-sans-serif,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%;background:var(--bg);color:var(--ink);font-family:var(--sans);-webkit-font-smoothing:antialiased}
+  #app{display:flex;height:100vh;width:100vw;overflow:hidden}
+
+  /* ---------- 1. viewport (compact) ---------- */
+  #viewport{position:relative;flex:1 1 auto;min-width:300px;
+    background:radial-gradient(120% 90% at 50% 0%, #16202a 0%, var(--bg) 70%)}
+  #gl{display:block;width:100%;height:100%;touch-action:none;cursor:grab}
+  #gl:active{cursor:grabbing}
+
+  /* title + description live inside the visual */
+  #titlebox{position:absolute;left:16px;top:14px;max-width:min(330px,72%);
+    background:rgba(14,19,24,.82);backdrop-filter:blur(6px);
+    border:1px solid var(--line);border-left:2px solid var(--accent);
+    border-radius:5px;padding:12px 14px}
+  #titlebox h1{margin:0;font-family:var(--mono);font-size:12px;letter-spacing:.15em;
+    text-transform:uppercase;color:var(--accent)}
+  #titlebox p{margin:7px 0 0;font-size:11px;line-height:1.55;color:var(--muted)}
+  #titlebox code{font-family:var(--mono);color:var(--ink);font-size:10.5px}
+
+  #readout{position:absolute;left:16px;bottom:12px;font-family:var(--mono);font-size:11.5px;
+    color:var(--muted);border-left:2px solid var(--accent-dim);padding-left:9px;
+    pointer-events:none;max-width:88%}
+  #readout b{color:var(--ink);font-weight:500}
+  #readout.computing b{color:var(--accent)}
+  #dot{display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--faint);margin-right:6px;vertical-align:middle}
+  #readout.computing #dot{background:var(--accent)}
+  @media (prefers-reduced-motion: no-preference){ #readout.computing #dot{animation:pulse 1s ease-in-out infinite} }
+  @keyframes pulse{0%,100%{opacity:.35}50%{opacity:1}}
+
+  #vhint{position:absolute;right:12px;bottom:12px;font-family:var(--mono);font-size:9.5px;
+    color:var(--faint);pointer-events:none}
+
+  /* ---------- 2. plots ---------- */
+  #plots{flex:0 0 430px;background:var(--panel);border-left:1px solid var(--line);
+    display:flex;flex-direction:column;overflow:hidden}
+  .phead{padding:11px 16px;border-bottom:1px solid var(--line);display:flex;
+    justify-content:space-between;align-items:baseline}
+  .phead h2{margin:0;font-family:var(--mono);font-size:10.5px;letter-spacing:.14em;
+    text-transform:uppercase;color:var(--muted)}
+  .phead .note{font-family:var(--mono);font-size:9.5px;color:var(--faint)}
+  #plotscroll{overflow-y:auto;flex:1 1 auto;padding:12px 16px 16px}
+
+  #disclaim{background:#2a1d10;border:1px solid var(--accent-dim);border-left:3px solid var(--accent);
+    border-radius:5px;padding:9px 11px;margin-bottom:14px}
+  #disclaim .dh{font-family:var(--mono);font-size:9.5px;letter-spacing:.12em;text-transform:uppercase;
+    color:var(--accent);font-weight:700;margin-bottom:5px}
+  #disclaim p{margin:0;font-family:var(--mono);font-size:10px;line-height:1.6;color:#d8c39e}
+  #disclaim b{color:#ffe6bd;font-weight:700}
+
+  .card{margin-bottom:14px}
+  .card:last-child{margin-bottom:0}
+  .card .ct{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:6px}
+  .card .ct .n{font-family:var(--mono);font-size:11px;color:var(--ink);letter-spacing:.04em}
+  .card .ct .sub{font-family:var(--mono);font-size:9.5px;color:var(--faint)}
+  .cwrap{background:#0d141a;border:1px solid var(--line);border-radius:5px;padding:6px 6px 2px}
+  .cwrap canvas{display:block;width:100%;height:200px}
+  .cs{margin-top:6px;font-family:var(--mono);font-size:10px;color:var(--muted);line-height:1.65}
+  .cs b{color:var(--ink);font-weight:500}
+  .cs .sep{color:var(--faint)}
+
+  /* ---------- 3. params ---------- */
+  #panel{flex:0 0 322px;background:var(--panel2);border-left:1px solid var(--line);
+    display:flex;flex-direction:column;overflow:hidden}
+  #controls{padding:6px 16px 4px;overflow-y:auto;flex:1 1 auto}
+
+  .row{padding:9px 0;border-bottom:1px solid #232e38}
+  .rl{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:6px}
+  .rl .name{font-size:10.5px;color:var(--muted);font-family:var(--mono)}
+  .rl .val{font-family:var(--mono);font-size:12.5px;color:var(--ink);font-variant-numeric:tabular-nums}
+  .rl .val .u{color:var(--faint);font-size:10.5px;margin-left:3px}
+  .intpill{color:var(--accent);font-size:8.5px;letter-spacing:.1em;border:1px solid var(--accent-dim);
+    border-radius:3px;padding:0 4px;margin-left:5px;vertical-align:1px}
+
+  input[type=range]{-webkit-appearance:none;appearance:none;width:100%;height:3px;background:#2b3742;border-radius:3px;outline:none}
+  input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;appearance:none;width:14px;height:14px;border-radius:50%;
+    background:var(--ink);border:2px solid var(--bg);box-shadow:0 0 0 1px var(--line);cursor:pointer;transition:background .12s}
+  input[type=range]::-webkit-slider-thumb:hover{background:var(--accent)}
+  input[type=range]::-moz-range-thumb{width:13px;height:13px;border-radius:50%;background:var(--ink);border:2px solid var(--bg);cursor:pointer}
+
+  .seg{display:flex;gap:4px}
+  .seg button{flex:1;font-family:var(--mono);font-size:10.5px;color:var(--muted);background:#141c23;
+    border:1px solid var(--line);border-radius:4px;padding:5px 0;cursor:pointer;transition:.12s}
+  .seg button:hover{color:var(--ink)}
+  .seg button.on{color:var(--bg);background:var(--accent);border-color:var(--accent);font-weight:600}
+
+  #held{margin:6px 0 2px;font-size:10.5px}
+  #held summary{cursor:pointer;color:var(--faint);font-family:var(--mono);list-style:none}
+  #held summary::-webkit-details-marker{display:none}
+  #held summary::before{content:"+ ";color:var(--accent-dim)}
+  #held[open] summary::before{content:"– "}
+  #held .kv{font-family:var(--mono);font-size:10px;color:var(--muted);line-height:1.7;margin-top:6px}
+  #held .kv span{color:var(--faint)}
+
+  #pfoot{padding:10px 16px;border-top:1px solid var(--line);display:flex;flex-direction:column;gap:7px}
+  .btns{display:flex;gap:6px}
+  .btn{flex:1;font-family:var(--mono);font-size:11px;color:var(--ink);background:#141c23;
+    border:1px solid var(--line);border-radius:5px;padding:8px 0;cursor:pointer;transition:.12s}
+  .btn:hover{border-color:var(--accent);color:var(--accent)}
+  .btn.primary{color:var(--accent)}
+  #hint{font-family:var(--mono);font-size:9.5px;color:var(--faint);line-height:1.5}
+
+  @media (max-width:1180px){ #plots{flex-basis:360px} #panel{flex-basis:290px} }
+  @media (max-width:940px){
+    #app{flex-direction:column;overflow-y:auto;height:auto;min-height:100vh}
+    #viewport{flex:0 0 auto;height:52vh}
+    #plots,#panel{flex:0 0 auto;border-left:none;border-top:1px solid var(--line);overflow:visible}
+    #plotscroll,#controls{overflow:visible}
+  }
+</style>
+</head>
+<body>
+<div id="app">
+
+  <!-- 1. visual -->
+  <div id="viewport">
+    <canvas id="gl"></canvas>
+    <div id="titlebox">
+      <h1>Drainage network analysis</h1>
+      <p>Fractional-Brownian value noise with analytic gradients, domain warp and radial falloff.
+         Drainage by priority-flood fill → <code>D8</code> routing → flow accumulation → Strahler
+         ordering. Integer hashing is exact 64-bit; all arithmetic is IEEE-754 double, matching the
+         Julia reference.</p>
+    </div>
+    <div id="readout"><span id="dot"></span><span id="rtext">initializing…</span></div>
+    <div id="vhint">drag to orbit · scroll to zoom</div>
+  </div>
+
+  <!-- 2. plots -->
+  <div id="plots">
+    <div class="phead">
+      <h2>Morphometry</h2>
+      <span class="note" id="gridnote">—</span>
+    </div>
+    <div id="plotscroll">
+      <div id="disclaim">
+        <div class="dh">⚠ Resolution notice</div>
+        <p><b>The reference analysis uses 4096² DEMs. This preview runs at <span id="d_res">256²</span> —
+        <span id="d_fac">16×</span> coarser.</b> Scaling behaviour is resolution-dependent: Hack's
+        exponent and the Horton ratios shift with grid size, because coarser grids truncate small
+        basins and shorten channels. <b>Treat the values below as indicative of trends, not as the
+        reference figures.</b></p>
+      </div>
+      <div class="card">
+        <div class="ct"><span class="n">Hack's law</span><span class="sub">L = k·A^h</span></div>
+        <div class="cwrap"><canvas id="c_hack"></canvas></div>
+        <div class="cs" id="s_hack">—</div>
+      </div>
+      <div class="card">
+        <div class="ct"><span class="n">Horton's laws</span><span class="sub">N, L̄, Ā vs order</span></div>
+        <div class="cwrap"><canvas id="c_horton"></canvas></div>
+        <div class="cs" id="s_horton">—</div>
+      </div>
+      <div class="card">
+        <div class="ct"><span class="n">Longitudinal profile</span><span class="sub">largest basin</span></div>
+        <div class="cwrap"><canvas id="c_prof"></canvas></div>
+        <div class="cs" id="s_prof">—</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 3. params -->
+  <aside id="panel">
+    <div class="phead"><h2>Parameters</h2><span class="note" id="seednote">—</span></div>
+    <div id="controls"></div>
+    <div id="pfoot">
+      <div class="btns">
+        <button class="btn" id="reset">Reset</button>
+        <button class="btn" id="png">PNG</button>
+        <button class="btn" id="csv">CSV</button>
+        <button class="btn primary" id="npy">.npy</button>
+      </div>
+      <div id="hint">Morphometrics run on the preview grid, not the 4096² reference — see the resolution notice.</div>
+    </div>
+  </aside>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+"use strict";
+const COMPUTE_SRC = String.raw`/* ============================================================
+   Terrain + hydrology compute core.
+   64-bit integer hashing via 32-bit limbs (Math.imul), verified
+   bit-identical to the BigInt reference. All FP in IEEE-754 double.
+   ============================================================ */
+
+/* ---------- 64-bit hash (hi,lo uint32 limbs) ---------- */
+const _T = [0, 0];
+function mul64(ah, al, bh, bl, out) {
+  const a0 = al & 0xffff, a1 = al >>> 16, b0 = bl & 0xffff, b1 = bl >>> 16;
+  const c0 = a0 * b0;
+  let c1 = (c0 >>> 16) + a1 * b0;
+  let c2 = c1 >>> 16;
+  c1 = (c1 & 0xffff) + a0 * b1;
+  c2 += c1 >>> 16;
+  const lo = (((c1 & 0xffff) << 16) | (c0 & 0xffff)) >>> 0;
+  let hi = (c2 + Math.imul(a1, b1)) >>> 0;
+  hi = (hi + Math.imul(ah, bl) + Math.imul(al, bh)) >>> 0;
+  out[0] = hi >>> 0; out[1] = lo >>> 0;
+}
+function hash33(ix, iy, iz, seed) {
+  let hi, lo;
+  mul64(ix < 0 ? 0xFFFFFFFF : 0, ix >>> 0, 0x9E3779B1, 0x85EBCA87, _T); hi = _T[0]; lo = _T[1];
+  mul64(iy < 0 ? 0xFFFFFFFF : 0, iy >>> 0, 0xC2B2AE3D, 0x27D4EB4F, _T); hi ^= _T[0]; lo ^= _T[1];
+  mul64(iz < 0 ? 0xFFFFFFFF : 0, iz >>> 0, 0x165667B1, 0x9E3779F9, _T); hi ^= _T[0]; lo ^= _T[1];
+  mul64(seed < 0 ? 0xFFFFFFFF : 0, seed >>> 0, 0x85EBCA77, 0xC2B2AE63, _T); hi ^= _T[0]; lo ^= _T[1];
+  hi >>>= 0; lo >>>= 0;
+  lo = (lo ^ (hi >>> 1)) >>> 0;
+  mul64(hi, lo, 0xff51afd7, 0xed558ccd, _T); hi = _T[0]; lo = _T[1];
+  lo = (lo ^ (hi >>> 1)) >>> 0;
+  mul64(hi, lo, 0xc4ceb9fe, 0x1a85ec53, _T); hi = _T[0]; lo = _T[1];
+  lo = (lo ^ (hi >>> 1)) >>> 0;
+  return (lo >>> 0) / 4294967295;
+}
+
+/* ---------- value noise + FBM ---------- */
+function ss5(t) { return t * t * t * (t * (t * 6 - 15) + 10); }
+function dss5(t) { return 30 * t * t * (t - 1) * (t - 1); }
+
+function valNoise(x, y, z, seed, o) {
+  const ix = Math.floor(x), iy = Math.floor(y), iz = Math.floor(z);
+  const fx = x - ix, fy = y - iy, fz = z - iz;
+  const u = ss5(fx), v = ss5(fy), w = ss5(fz);
+  const du = dss5(fx), dv = dss5(fy), dw = dss5(fz);
+  const c000 = hash33(ix, iy, iz, seed), c100 = hash33(ix + 1, iy, iz, seed);
+  const c010 = hash33(ix, iy + 1, iz, seed), c110 = hash33(ix + 1, iy + 1, iz, seed);
+  const c001 = hash33(ix, iy, iz + 1, seed), c101 = hash33(ix + 1, iy, iz + 1, seed);
+  const c011 = hash33(ix, iy + 1, iz + 1, seed), c111 = hash33(ix + 1, iy + 1, iz + 1, seed);
+  const x00 = (1 - u) * c000 + u * c100, x10 = (1 - u) * c010 + u * c110;
+  const x01 = (1 - u) * c001 + u * c101, x11 = (1 - u) * c011 + u * c111;
+  const y0 = (1 - v) * x00 + v * x10, y1 = (1 - v) * x01 + v * x11;
+  const val = (1 - w) * y0 + w * y1;
+  const dx00 = c100 - c000, dx10 = c110 - c010, dx01 = c101 - c001, dx11 = c111 - c011;
+  const dy0 = x10 - x00, dy1 = x11 - x01, dz = y1 - y0;
+  o[0] = val;
+  o[1] = du * ((1 - w) * ((1 - v) * dx00 + v * dx10) + w * ((1 - v) * dx01 + v * dx11));
+  o[2] = dv * ((1 - w) * dy0 + w * dy1);
+  o[3] = dw * dz;
+}
+const _N = [0, 0, 0, 0];
+function fbm(x, y, z, octaves, lac, gain, k, klist, seed) {
+  let total = 0, amp = 1, freq = 1, norm = 0;
+  for (let o = 1; o <= octaves; o++) {
+    const kval = klist ? klist[Math.min(o, klist.length) - 1] : k;
+    valNoise(x * freq, y * freq, z * freq, seed + 1013 * o, _N);
+    const val = 2 * _N[0] - 1;
+    const dx = 2 * _N[1], dy = 2 * _N[2], dz = 2 * _N[3];
+    const g = Math.sqrt(dx * dx + dy * dy + dz * dz);
+    total += amp * (1 / (1 + kval * g)) * val;
+    norm += amp; amp *= gain; freq *= lac;
+  }
+  return total / norm;
+}
+
+/* ---------- hydrology ---------- */
+const DR8 = [-1, -1, -1, 0, 0, 1, 1, 1], DC8 = [-1, 0, 1, -1, 1, -1, 0, 1];
+
+function Heap() { this.e = []; this.i = []; }
+Heap.prototype.push = function (e, i) {
+  this.e.push(e); this.i.push(i); let c = this.e.length - 1;
+  while (c > 0) {
+    const p = (c - 1) >> 1; if (this.e[p] <= this.e[c]) break;
+    let t = this.e[p]; this.e[p] = this.e[c]; this.e[c] = t;
+    t = this.i[p]; this.i[p] = this.i[c]; this.i[c] = t; c = p;
+  }
+};
+Heap.prototype.pop = function () {
+  const n = this.e.length - 1, te = this.e[0], ti = this.i[0];
+  this.e[0] = this.e[n]; this.i[0] = this.i[n]; this.e.pop(); this.i.pop();
+  let p = 0;
+  for (;;) {
+    const l = 2 * p + 1, r = l + 1; let m = p;
+    if (l < this.e.length && this.e[l] < this.e[m]) m = l;
+    if (r < this.e.length && this.e[r] < this.e[m]) m = r;
+    if (m === p) break;
+    let t = this.e[p]; this.e[p] = this.e[m]; this.e[m] = t;
+    t = this.i[p]; this.i[p] = this.i[m]; this.i[m] = t; p = m;
+  }
+  return [te, ti];
+};
+Heap.prototype.size = function () { return this.e.length; };
+
+function priorityFlood(Z, W, H, eps) {
+  const f = Float64Array.from(Z), seen = new Uint8Array(W * H), hp = new Heap();
+  for (let j = 0; j < W; j++) { for (const i of [0, H - 1]) { const l = i * W + j; if (!seen[l]) { seen[l] = 1; hp.push(Z[l], l); } } }
+  for (let i = 0; i < H; i++) { for (const j of [0, W - 1]) { const l = i * W + j; if (!seen[l]) { seen[l] = 1; hp.push(Z[l], l); } } }
+  while (hp.size()) {
+    const pr = hp.pop(), e = pr[0], l = pr[1], i = (l / W) | 0, j = l % W;
+    for (let k = 0; k < 8; k++) {
+      const ni = i + DR8[k], nj = j + DC8[k];
+      if (ni < 0 || ni >= H || nj < 0 || nj >= W) continue;
+      const nl = ni * W + nj; if (seen[nl]) continue;
+      seen[nl] = 1; const nh = Math.max(Z[nl], e + eps); f[nl] = nh; hp.push(nh, nl);
+    }
+  }
+  return f;
+}
+
+function d8(f, W, H, cs) {
+  const N = W * H, recv = new Int32Array(N).fill(-1);
+  const dist = [Math.SQRT2 * cs, cs, Math.SQRT2 * cs, cs, cs, Math.SQRT2 * cs, cs, Math.SQRT2 * cs];
+  for (let i = 0; i < H; i++) for (let j = 0; j < W; j++) {
+    const l = i * W + j, fc = f[l]; let best = -1, bs = 0;
+    for (let k = 0; k < 8; k++) {
+      const ni = i + DR8[k], nj = j + DC8[k];
+      if (ni < 0 || ni >= H || nj < 0 || nj >= W) continue;
+      const nl = ni * W + nj, drop = fc - f[nl];
+      if (drop > 0) { const s = drop / dist[k]; if (s > bs) { bs = s; best = nl; } }
+    }
+    recv[l] = best;
+  }
+  const idx = new Int32Array(N); for (let n = 0; n < N; n++) idx[n] = n;
+  const ord = Array.prototype.slice.call(idx).sort((a, b) => f[b] - f[a]);
+  const acc = new Float64Array(N).fill(1);
+  for (let n = 0; n < ord.length; n++) { const l = ord[n], r = recv[l]; if (r >= 0) acc[r] += acc[l]; }
+  return { recv, acc, orderIdx: ord };
+}
+
+function strahlerOrder(recv, isch, orderIdx) {
+  const N = recv.length, ord = new Int32Array(N), mx = new Int32Array(N), cnt = new Int32Array(N);
+  for (let n = 0; n < orderIdx.length; n++) {
+    const l = orderIdx[n]; if (!isch[l]) continue;
+    ord[l] = mx[l] === 0 ? 1 : (cnt[l] >= 2 ? mx[l] + 1 : mx[l]);
+    const r = recv[l];
+    if (r >= 0 && isch[r]) {
+      const o = ord[l];
+      if (o > mx[r]) { mx[r] = o; cnt[r] = 1; } else if (o === mx[r]) { cnt[r]++; }
+    }
+  }
+  return ord;
+}
+
+function basinLabels(recv) {
+  const N = recv.length, term = new Int32Array(N).fill(-1), path = [];
+  for (let s = 0; s < N; s++) {
+    if (term[s] >= 0) continue;
+    let l = s; path.length = 0;
+    while (recv[l] >= 0 && term[l] < 0) { path.push(l); l = recv[l]; }
+    const t = term[l] >= 0 ? term[l] : l;
+    for (let q = 0; q < path.length; q++) term[path[q]] = t;
+    if (term[s] < 0) term[s] = t;
+  }
+  return term;
+}
+
+/* least-squares fit y = a + b x ; returns {a,b,r2} */
+function linfit(xs, ys) {
+  const n = xs.length;
+  if (n < 2) return { a: 0, b: 0, r2: 0 };
+  let sx = 0, sy = 0;
+  for (let i = 0; i < n; i++) { sx += xs[i]; sy += ys[i]; }
+  const mx = sx / n, my = sy / n;
+  let sxy = 0, sxx = 0;
+  for (let i = 0; i < n; i++) { sxy += (xs[i] - mx) * (ys[i] - my); sxx += (xs[i] - mx) * (xs[i] - mx); }
+  const b = sxx === 0 ? 0 : sxy / sxx, a = my - b * mx;
+  let ssr = 0, sst = 0;
+  for (let i = 0; i < n; i++) { const p = a + b * xs[i]; ssr += (ys[i] - p) * (ys[i] - p); sst += (ys[i] - my) * (ys[i] - my); }
+  return { a, b, r2: sst === 0 ? 0 : 1 - ssr / sst };
+}
+
+/* ---------- full hydrology + morphometrics ---------- */
+function hydrology(z32, W, H, cs, minAcc) {
+  const N = W * H;
+  const f = priorityFlood(z32, W, H, 1e-4);
+  const dd = d8(f, W, H, cs), recv = dd.recv, acc = dd.acc, orderIdx = dd.orderIdx;
+
+  const isch = new Uint8Array(N);
+  for (let l = 0; l < N; l++) if (acc[l] >= minAcc && recv[l] >= 0) isch[l] = 1;
+  const ord = strahlerOrder(recv, isch, orderIdx);
+
+  /* flow distance to outlet (low -> high) */
+  const fdist = new Float64Array(N);
+  for (let n = orderIdx.length - 1; n >= 0; n--) {
+    const l = orderIdx[n], r = recv[l];
+    if (r < 0) { fdist[l] = 0; continue; }
+    const i = (l / W) | 0, j = l % W, ri = (r / W) | 0, rj = r % W;
+    const step = (i !== ri && j !== rj) ? Math.SQRT2 * cs : cs;
+    fdist[l] = fdist[r] + step;
+  }
+
+  /* basins */
+  const term = basinLabels(recv);
+  const cellA = (cs * cs) / 1e6;            // km^2
+
+  const areaCells = new Map(), maxL = new Map(), hasCh = new Map(), headOf = new Map();
+  for (let l = 0; l < N; l++) {
+    const t = term[l];
+    areaCells.set(t, (areaCells.get(t) || 0) + 1);
+    if (isch[l]) {
+      hasCh.set(t, true);
+      const d = fdist[l];
+      if (!(maxL.get(t) >= d)) { maxL.set(t, d); headOf.set(t, l); }
+    }
+  }
+
+  /* only basins containing a channel are real basins */
+  const ids = [];
+  for (const t of areaCells.keys()) if (hasCh.get(t)) ids.push(t);
+  ids.sort((a, b) => areaCells.get(b) - areaCells.get(a));
+
+  const hue = new Map();
+  ids.forEach((id, n) => hue.set(id, (137.507 * n) % 360));
+  const basin = new Int32Array(N).fill(-1);
+  for (let l = 0; l < N; l++) if (hue.has(term[l])) basin[l] = term[l];
+  const hueOf = {}; for (const kv of hue) hueOf[kv[0]] = kv[1];
+
+  /* ---- reaches for drawing ---- */
+  const ndon = new Int32Array(N);
+  for (let l = 0; l < N; l++) if (isch[l]) { const r = recv[l]; if (r >= 0 && isch[r]) ndon[r]++; }
+  const reaches = []; let omax = 1;
+  for (let s = 0; s < N; s++) {
+    if (!isch[s]) continue;
+    if (!(ndon[s] === 0 || ndon[s] >= 2)) continue;
+    const idxs = [s]; let l = s;
+    for (;;) { const r = recv[l]; if (r < 0 || !isch[r]) break; idxs.push(r); l = r; if (ndon[l] >= 2) break; }
+    if (idxs.length >= 2) { const o = ord[s] || 1; if (o > omax) omax = o; reaches.push({ o: o, idxs: Int32Array.from(idxs) }); }
+  }
+
+  /* ---- Hack's law: L = k A^h over basins ---- */
+  const hack = { pts: [], excl: [], h: 0, k: 0, r2: 0, n: 0 };
+  for (const id of ids) {
+    const A = areaCells.get(id) * cellA;
+    const L = (maxL.get(id) || 0) / 1000;   // km
+    if (A > 0 && L > 0) {
+      const pt = [A, L];
+      (A >= 1 && L >= 1) ? hack.pts.push(pt) : hack.excl.push(pt);
+    }
+  }
+  if (hack.pts.length >= 3) {
+    const X = hack.pts.map(p => Math.log10(p[0])), Y = hack.pts.map(p => Math.log10(p[1]));
+    const fit = linfit(X, Y);
+    hack.h = fit.b; hack.k = Math.pow(10, fit.a); hack.r2 = fit.r2; hack.n = X.length;
+  }
+
+  /* ---- Horton's laws: streams = maximal same-order chains ---- */
+  const streams = [];                      // {o, len, area}
+  for (let s = 0; s < N; s++) {
+    if (!isch[s]) continue;
+    const o = ord[s];
+    const r0 = recv[s];
+    const upSame = (ndon[s] > 0) && (() => {            // does an upstream cell share this order?
+      const i = (s / W) | 0, j = s % W;
+      for (let k = 0; k < 8; k++) {
+        const ni = i + DR8[k], nj = j + DC8[k];
+        if (ni < 0 || ni >= H || nj < 0 || nj >= W) continue;
+        const nl = ni * W + nj;
+        if (isch[nl] && recv[nl] === s && ord[nl] === o) return true;
+      }
+      return false;
+    })();
+    if (upSame) continue;                                // not the head of its order-chain
+    let l = s, len = 0;
+    for (;;) {
+      const r = recv[l];
+      if (r < 0 || !isch[r] || ord[r] !== o) break;
+      const i = (l / W) | 0, j = l % W, ri = (r / W) | 0, rj = r % W;
+      len += (i !== ri && j !== rj) ? Math.SQRT2 * cs : cs;
+      l = r;
+    }
+    streams.push({ o: o, len: len / 1000, area: acc[l] * cellA });
+  }
+  const byOrd = new Map();
+  for (const st of streams) {
+    if (!byOrd.has(st.o)) byOrd.set(st.o, { n: 0, sumL: 0, sumA: 0 });
+    const g = byOrd.get(st.o); g.n++; g.sumL += st.len; g.sumA += st.area;
+  }
+  const horton = { orders: [], Rb: 0, Rl: 0, Ra: 0, r2: 0 };
+  const oks = [...byOrd.keys()].sort((a, b) => a - b);
+  for (const o of oks) {
+    const g = byOrd.get(o);
+    horton.orders.push({ o: o, N: g.n, Lbar: g.sumL / g.n, Abar: g.sumA / g.n });
+  }
+  if (horton.orders.length >= 2) {
+    const X = horton.orders.map(d => d.o);
+    const fN = linfit(X, horton.orders.map(d => Math.log10(d.N)));
+    horton.Rb = Math.pow(10, -fN.b); horton.r2 = fN.r2;
+    horton.Rl = Math.pow(10, linfit(X, horton.orders.map(d => Math.log10(d.Lbar))).b);
+    horton.Ra = Math.pow(10, linfit(X, horton.orders.map(d => Math.log10(d.Abar))).b);
+  }
+
+  /* ---- longitudinal profile of the largest basin ---- */
+  let prof = null;
+  if (ids.length) {
+    const id = ids[0], head = headOf.get(id);
+    if (head !== undefined) {
+      const d = [], e = [];
+      let l = head; const L0 = fdist[head];
+      for (;;) {
+        d.push((L0 - fdist[l]) / 1000); e.push(z32[l]);
+        const r = recv[l]; if (r < 0) break; l = r;
+      }
+      prof = { d: d, e: e, area: areaCells.get(id) * cellA, len: L0 / 1000 };
+    }
+  }
+
+  return { recv, isch, ord, reaches, omax, basin, hueOf, nBasins: ids.length, hack, horton, prof };
+}
+
+function computeTerrain(P) {
+  const W = P.res | 0, H = P.res | 0;
+  const octaves = Math.max(1, Math.round(P.octaves));
+  const seed = Math.round(P.seed);
+  const lac = Math.max(P.lacunarity, 1e-3);
+  const gain = Math.min(Math.max(P.gain, 0.05), 1.0);
+  const k = Math.max(P.k, 0);
+  const dom = Math.max(P.domain, 1e-3);
+  const shp = Math.max(P.shaping, 0);
+  const rs = Math.max(P.radial_strength, 1e-3);
+  const re = Math.max(P.radial_exponent, 1e-3);
+  const maxE = Math.max(P.max_elev, 1e-3), minE = 0.0;
+  const klist = [0.6, 0.8, 1.0, 1.4, 1.8, 2.5, 3.5];
+  const z = 0.2, ws = 0.04, wf = 0.6, woct = 2, wg = 0.5, wlac = 2.0, waniso = 0.7;
+
+  const raw = new Float64Array(W * H);
+  for (let j = 0; j < H; j++) {
+    const y = j / (H - 1) * dom;
+    for (let i = 0; i < W; i++) {
+      const x = i / (W - 1) * dom;
+      const wv = fbm(x * wf, y * wf, z, woct, wlac, wg, 1.0, null, seed);
+      raw[j * W + i] = fbm(x + ws * wv, y + ws * (waniso * wv), z, octaves, lac, gain, k, klist, seed);
+    }
+  }
+  let mn = Infinity, mx = -Infinity;
+  for (let n = 0; n < raw.length; n++) { const v = raw[n]; if (v < mn) mn = v; if (v > mx) mx = v; }
+  let inv = 1 / ((mx - mn) + 1e-12);
+  for (let n = 0; n < raw.length; n++) raw[n] = (raw[n] - mn) * inv;
+  for (let n = 0; n < raw.length; n++) { const hh = raw[n]; raw[n] = Math.pow(hh, 1 + shp * hh); }
+  const cx = (W + 1) / 2, cy = (H + 1) / 2;
+  for (let j = 0; j < H; j++) for (let i = 0; i < W; i++) {
+    const rx = (i + 1 - cx) / (0.5 * W), ry = (j + 1 - cy) / (0.5 * H);
+    raw[j * W + i] *= Math.exp(-(rs * Math.pow(Math.sqrt(rx * rx + ry * ry), re)));
+  }
+  mn = Infinity; mx = -Infinity;
+  for (let n = 0; n < raw.length; n++) { const v = raw[n]; if (v < mn) mn = v; if (v > mx) mx = v; }
+  inv = 1 / ((mx - mn) + 1e-12);
+  const z32 = new Float32Array(W * H);
+  let zmin = Infinity, zmax = -Infinity;
+  for (let n = 0; n < raw.length; n++) {
+    let e = minE + (maxE - minE) * ((raw[n] - mn) * inv);
+    if (e < minE) e = minE; else if (e > maxE) e = maxE;
+    z32[n] = e; if (e < zmin) zmin = e; if (e > zmax) zmax = e;
+  }
+  const cs = 100000 / (W - 1);
+  const hy = P.streams ? hydrology(z32, W, H, cs, P.minAcc) : null;
+  return { z: z32, w: W, h: H, min: zmin, max: zmax, maxElev: maxE, seed: seed, cs: cs, hy: hy };
+}
+
+
+`;
+
+let worker=null, computeMain=null;
+try{
+  const blob=new Blob([COMPUTE_SRC+"\nself.onmessage=function(e){self.postMessage(computeTerrain(e.data));};"],
+                      {type:"application/javascript"});
+  worker=new Worker(URL.createObjectURL(blob));
+  worker.onmessage=e=>onResult(e.data);
+}catch(err){ worker=null; }
+if(!worker){
+  try{ computeMain=(new Function(COMPUTE_SRC+"; return computeTerrain;"))(); }
+  catch(e){ console.error("compute init failed",e); }
+}
+
+/* ---------- controls ---------- */
+const SPEC=[
+  {key:"octaves",        min:1,    max:10,   step:1,    def:6,    int:true},
+  {key:"lacunarity",     min:0.5,  max:5.5,  step:0.05, def:2.0,  dp:2},
+  {key:"gain",           min:0.10, max:1.0,  step:0.005,def:0.55, dp:3},
+  {key:"k",              min:0.5,  max:15.0, step:0.1,  def:1.0,  dp:2},
+  {key:"domain",         min:0.1,  max:15.0, step:0.05, def:10.0, dp:2},
+  {key:"shaping",        min:0.1,  max:5.0,  step:0.05, def:1.8,  dp:2},
+  {key:"radial_strength",min:0.1,  max:2.5,  step:0.02, def:1.0,  dp:2},
+  {key:"radial_exponent",min:0.1,  max:7.5,  step:0.05, def:2.0,  dp:2},
+  {key:"max_elev",       min:500,  max:5500, step:10,   def:2500, dp:0, unit:"m"},
+  {key:"seed",           min:1,    max:100,  step:1,    def:1,    int:true},
+];
+const RES_OPTS=[192,256,384,512];
+let RES=256, EXAGG=1.0;
+let SHOW_STREAMS=true, SHOW_BASINS=true, MIN_ACC=100;
+
+const inputs={}; const ctr=document.getElementById("controls");
+const fmt=(s,v)=> s.int?String(Math.round(v)):v.toFixed(s.dp);
+
+SPEC.forEach(s=>{
+  const row=document.createElement("div"); row.className="row";
+  row.innerHTML=`<div class="rl"><span class="name">${s.key}${s.int?'<span class="intpill">INT</span>':''}</span>`+
+    `<span class="val"><span id="v_${s.key}">${fmt(s,s.def)}</span>${s.unit?`<span class="u">${s.unit}</span>`:''}</span></div>`+
+    `<input type="range" id="i_${s.key}" min="${s.min}" max="${s.max}" step="${s.step}" value="${s.def}">`;
+  ctr.appendChild(row);
+  const inp=row.querySelector("input"); inputs[s.key]=inp;
+  inp.addEventListener("input",()=>{ document.getElementById("v_"+s.key).textContent=fmt(s,parseFloat(inp.value)); requestCompute(); });
+});
+(function(){
+  const row=document.createElement("div"); row.className="row";
+  row.innerHTML=`<div class="rl"><span class="name">preview grid</span><span class="val" id="v_res">${RES}²</span></div><div class="seg" id="resseg"></div>`;
+  ctr.appendChild(row);
+  const seg=row.querySelector("#resseg");
+  RES_OPTS.forEach(r=>{
+    const b=document.createElement("button"); b.textContent=r; if(r===RES)b.className="on";
+    b.onclick=()=>{ RES=r; document.getElementById("v_res").textContent=r+"²";
+      [...seg.children].forEach(c=>c.classList.remove("on")); b.classList.add("on"); requestCompute(); };
+    seg.appendChild(b);
+  });
+})();
+(function(){
+  const row=document.createElement("div"); row.className="row";
+  row.innerHTML=`<div class="rl"><span class="name">overlays</span><span class="val" id="v_ov">streams + basins</span></div>`+
+    `<div class="seg"><button id="b_str" class="on">streams</button><button id="b_bas" class="on">basins</button></div>`;
+  ctr.appendChild(row);
+  const upd=()=>{ document.getElementById("v_ov").textContent=
+    (SHOW_STREAMS&&SHOW_BASINS)?"streams + basins":SHOW_STREAMS?"streams":SHOW_BASINS?"basins":"terrain only"; };
+  document.getElementById("b_str").onclick=e=>{ SHOW_STREAMS=!SHOW_STREAMS; e.target.classList.toggle("on",SHOW_STREAMS); upd(); if(lastResult)applyMesh(lastResult); };
+  document.getElementById("b_bas").onclick=e=>{ SHOW_BASINS=!SHOW_BASINS; e.target.classList.toggle("on",SHOW_BASINS); upd(); if(lastResult)applyMesh(lastResult); };
+})();
+(function(){
+  const row=document.createElement("div"); row.className="row";
+  row.innerHTML=`<div class="rl"><span class="name">min_acc<span class="intpill">INT</span></span><span class="val" id="v_acc">${MIN_ACC}</span></div>`+
+    `<input type="range" id="i_acc" min="50" max="2000" step="25" value="${MIN_ACC}">`;
+  ctr.appendChild(row);
+  row.querySelector("input").addEventListener("input",e=>{
+    MIN_ACC=parseInt(e.target.value,10); document.getElementById("v_acc").textContent=MIN_ACC; requestCompute();
+  });
+})();
+(function(){
+  const row=document.createElement("div"); row.className="row";
+  row.innerHTML=`<div class="rl"><span class="name">vertical exaggeration</span><span class="val" id="v_ex">1.00×</span></div>`+
+    `<input type="range" id="i_ex" min="0.3" max="3" step="0.05" value="1">`;
+  ctr.appendChild(row);
+  row.querySelector("input").addEventListener("input",e=>{
+    EXAGG=parseFloat(e.target.value); document.getElementById("v_ex").textContent=EXAGG.toFixed(2)+"×";
+    if(lastResult) applyMesh(lastResult);
+  });
+})();
+(function(){
+  const d=document.createElement("details"); d.id="held";
+  d.innerHTML=`<summary>held constant</summary><div class="kv">`+
+    `<span>warp_strength</span> 0.04 · <span>warp_freq</span> 0.6 · <span>warp_octaves</span> 2<br>`+
+    `<span>warp_gain</span> 0.5 · <span>warp_lacunarity</span> 2.0 · <span>warp_anisotropy</span> 0.7<br>`+
+    `<span>z</span> 0.2 · <span>min_elev</span> 0 · <span>extent</span> 100 km<br>`+
+    `<span>klist</span> [0.6, 0.8, 1.0, 1.4, 1.8, 2.5, 3.5]</div>`;
+  ctr.appendChild(d);
+})();
+
+function currentParams(){
+  const p={res:RES};
+  SPEC.forEach(s=>p[s.key]=parseFloat(inputs[s.key].value));
+  p.streams=true; p.minAcc=MIN_ACC;
+  return p;
+}
+
+/* ---------- scheduling ---------- */
+let busy=false,pending=null,lastResult=null;
+const readout=document.getElementById("readout"), rtext=document.getElementById("rtext");
+function requestCompute(){ pending=currentParams(); pump(); }
+function pump(){
+  if(busy||!pending)return;
+  const p=pending; pending=null; busy=true;
+  readout.classList.add("computing"); rtext.textContent="computing…";
+  if(worker) worker.postMessage(p);
+  else setTimeout(()=>{ try{ onResult(computeMain(p)); }catch(e){ console.error(e); busy=false; } },0);
+}
+function onResult(r){
+  busy=false; lastResult=r; applyMesh(r); drawAll();
+  readout.classList.remove("computing");
+  const hy=r.hy;
+  rtext.innerHTML=`elev <b>${r.min.toFixed(0)}–${r.max.toFixed(0)} m</b>`+
+    (hy?` · <b>${hy.nBasins}</b> basins · max order <b>${hy.omax}</b>`:"");
+  document.getElementById("gridnote").textContent=`${r.w}² · min_acc ${MIN_ACC}`;
+  document.getElementById("d_res").textContent=`${r.w}²`;
+  const fac=4096/r.w;
+  document.getElementById("d_fac").textContent=
+    (Math.abs(fac-Math.round(fac))<0.05 ? Math.round(fac) : fac.toFixed(1))+"×";
+  document.getElementById("seednote").textContent=`seed ${r.seed}`;
+  pump();
+}
+
+/* ---------- three.js ---------- */
+const KM_SPAN=100, Z_SPAN=50, MAX_CEIL=5500;
+const yScale=()=> EXAGG*(Z_SPAN/MAX_CEIL);
+const canvas=document.getElementById("gl");
+const renderer=new THREE.WebGLRenderer({canvas,antialias:true,preserveDrawingBuffer:true});
+renderer.setPixelRatio(Math.min(window.devicePixelRatio,2));
+const scene=new THREE.Scene();
+scene.background=new THREE.Color(0x0e1318);
+const camera=new THREE.PerspectiveCamera(42,1,0.5,2000);
+scene.add(new THREE.AmbientLight(0xffffff,0.68));
+const sun=new THREE.DirectionalLight(0xffffff,0.6); sun.position.set(-0.6,1,0.35); scene.add(sun);
+let geom=null,mesh=null,geoRes=0;
+
+function buildGeometry(res){
+  if(mesh){ scene.remove(mesh); geom.dispose(); mesh.material.dispose(); }
+  geom=new THREE.BufferGeometry();
+  const N=res*res, pos=new Float32Array(N*3), col=new Float32Array(N*3);
+  for(let r=0;r<res;r++)for(let c=0;c<res;c++){
+    const i=(r*res+c)*3;
+    pos[i]=c/(res-1)*KM_SPAN; pos[i+1]=0; pos[i+2]=r/(res-1)*KM_SPAN;
+  }
+  const idx=new Uint32Array((res-1)*(res-1)*6); let t=0;
+  for(let r=0;r<res-1;r++)for(let c=0;c<res-1;c++){
+    const a=r*res+c,b=a+1,d=a+res,e=d+1;
+    idx[t++]=a;idx[t++]=d;idx[t++]=b; idx[t++]=b;idx[t++]=d;idx[t++]=e;
+  }
+  geom.setAttribute("position",new THREE.BufferAttribute(pos,3));
+  geom.setAttribute("color",new THREE.BufferAttribute(col,3));
+  geom.setIndex(new THREE.BufferAttribute(idx,1));
+  const mat=new THREE.MeshLambertMaterial({vertexColors:true,side:THREE.DoubleSide,
+    polygonOffset:true,polygonOffsetFactor:1,polygonOffsetUnits:1});
+  mesh=new THREE.Mesh(geom,mat); scene.add(mesh); geoRes=res;
+}
+
+const CMAP=[[0,0.20,0.20,0.60],[0.15,0.0,0.60,1.0],[0.25,0.0,0.80,0.40],[0.50,1.0,1.0,0.60],[0.75,0.50,0.36,0.33],[1.0,1.0,1.0,1.0]];
+function cmap(t){
+  if(t<=0)return CMAP[0]; if(t>=1)return CMAP[CMAP.length-1];
+  for(let i=1;i<CMAP.length;i++){ if(t<=CMAP[i][0]){
+    const a=CMAP[i-1],b=CMAP[i],f=(t-a[0])/(b[0]-a[0]);
+    return [a[1]+(b[1]-a[1])*f,a[2]+(b[2]-a[2])*f,a[3]+(b[3]-a[3])*f];
+  }} return CMAP[CMAP.length-1];
+}
+
+let lineGroup=null;
+function clearLines(){
+  if(!lineGroup)return;
+  lineGroup.traverse(o=>{ if(o.geometry)o.geometry.dispose(); if(o.material)o.material.dispose(); });
+  scene.remove(lineGroup); lineGroup=null;
+}
+function buildStreams(r){
+  clearLines();
+  if(!SHOW_STREAMS||!r.hy||!r.hy.reaches.length)return;
+  lineGroup=new THREE.Group();
+  const res=r.w, ys=yScale(), lift=0.004*(r.max-r.min)*ys+0.06;
+  const pts=[];
+  for(const rc of r.hy.reaches){
+    const ix=rc.idxs;
+    for(let n=0;n<ix.length-1;n++){
+      for(const l of [ix[n],ix[n+1]]){
+        const i=(l/res)|0, j=l%res;
+        pts.push(j/(res-1)*KM_SPAN, r.z[l]*ys+lift, i/(res-1)*KM_SPAN);
+      }
+    }
+  }
+  const g=new THREE.BufferGeometry();
+  g.setAttribute("position",new THREE.Float32BufferAttribute(pts,3));
+  lineGroup.add(new THREE.LineSegments(g,new THREE.LineBasicMaterial({color:0x2f7fe0})));
+  scene.add(lineGroup);
+}
+
+const GREY=[0.70,0.70,0.70];
+function applyMesh(r){
+  if(geoRes!==r.w) buildGeometry(r.w);
+  const pos=geom.attributes.position.array, col=geom.attributes.color.array;
+  const ys=yScale(), span=(r.max-r.min)||1;
+  const useBasin=SHOW_BASINS&&r.hy, tmp=new THREE.Color();
+  for(let n=0;n<r.z.length;n++){
+    pos[n*3+1]=r.z[n]*ys;
+    let cr,cg,cb;
+    if(useBasin){
+      const b=r.hy.basin[n];
+      if(b>=0){ tmp.setHSL((((r.hy.hueOf[b]%360)+360)%360)/360,0.55,0.62); cr=tmp.r;cg=tmp.g;cb=tmp.b; }
+      else { cr=GREY[0];cg=GREY[1];cb=GREY[2]; }
+    }else{ const c=cmap((r.z[n]-r.min)/span); cr=c[0];cg=c[1];cb=c[2]; }
+    col[n*3]=cr; col[n*3+1]=cg; col[n*3+2]=cb;
+  }
+  geom.attributes.position.needsUpdate=true;
+  geom.attributes.color.needsUpdate=true;
+  geom.computeVertexNormals();
+  buildStreams(r);
+}
+
+let theta=Math.PI*1.275, phi=Math.PI*0.36, radius=190;
+const target=new THREE.Vector3(KM_SPAN/2,7,KM_SPAN/2);
+const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
+function updateCam(){
+  const sp=Math.sin(phi);
+  camera.position.set(target.x+radius*sp*Math.cos(theta),target.y+radius*Math.cos(phi),target.z+radius*sp*Math.sin(theta));
+  camera.lookAt(target);
+}
+const ptrs=new Map(); let lastPinch=0;
+canvas.addEventListener("pointerdown",e=>{canvas.setPointerCapture(e.pointerId);ptrs.set(e.pointerId,{x:e.clientX,y:e.clientY});});
+canvas.addEventListener("pointerup",e=>{ptrs.delete(e.pointerId);lastPinch=0;});
+canvas.addEventListener("pointercancel",e=>{ptrs.delete(e.pointerId);lastPinch=0;});
+canvas.addEventListener("pointermove",e=>{
+  if(!ptrs.has(e.pointerId))return;
+  const p=ptrs.get(e.pointerId), dx=e.clientX-p.x, dy=e.clientY-p.y;
+  ptrs.set(e.pointerId,{x:e.clientX,y:e.clientY});
+  if(ptrs.size>=2){
+    const a=[...ptrs.values()], d=Math.hypot(a[0].x-a[1].x,a[0].y-a[1].y);
+    if(lastPinch) radius=clamp(radius*(lastPinch/d),60,420);
+    lastPinch=d;
+  }else{ theta-=dx*0.005; phi=clamp(phi-dy*0.005,0.06,Math.PI*0.49); }
+  updateCam();
+});
+canvas.addEventListener("wheel",e=>{e.preventDefault();radius=clamp(radius*(1+e.deltaY*0.0011),60,420);updateCam();},{passive:false});
+function resize(){
+  const w=canvas.clientWidth||window.innerWidth,h=canvas.clientHeight||window.innerHeight;
+  renderer.setSize(w,h,false); camera.aspect=w/h; camera.updateProjectionMatrix();
+}
+window.addEventListener("resize",()=>{resize();drawAll();});
+(function loop(){requestAnimationFrame(loop);renderer.render(scene,camera);})();
+
+/* ---------- charts ---------- */
+const CSS={ink:"#e8edf1",muted:"#8493a0",faint:"#5a6772",grid:"#1f2932",blue:"#3b82e8",accent:"#e8a24a",red:"#c2544d"};
+function frame(cv){
+  const cx=cv.getContext("2d");
+  const dpr=Math.min(window.devicePixelRatio,2);
+  const w=cv.clientWidth||360, h=cv.clientHeight||200;
+  cv.width=w*dpr; cv.height=h*dpr; cx.setTransform(dpr,0,0,dpr,0,0);
+  cx.clearRect(0,0,w,h);
+  return {cx,w,h,L:44,R:10,T:10,B:26};
+}
+function axes(f,xlab,ylab){
+  const cx=f.cx;
+  cx.strokeStyle=CSS.faint; cx.lineWidth=1;
+  cx.beginPath(); cx.moveTo(f.L,f.T); cx.lineTo(f.L,f.h-f.B); cx.lineTo(f.w-f.R,f.h-f.B); cx.stroke();
+  cx.fillStyle=CSS.muted; cx.font="9px ui-monospace,monospace"; cx.textAlign="center";
+  cx.fillText(xlab,(f.L+f.w-f.R)/2,f.h-4);
+  cx.save(); cx.translate(10,(f.T+f.h-f.B)/2); cx.rotate(-Math.PI/2); cx.fillText(ylab,0,0); cx.restore();
+}
+function drawAll(){
+  if(!lastResult||!lastResult.hy){ return; }
+  chartHack(lastResult.hy);
+  chartHorton(lastResult.hy);
+  chartProfile(lastResult.hy);
+}
+
+function chartHack(hy){
+  const f=frame(document.getElementById("c_hack")), cx=f.cx, S=document.getElementById("s_hack");
+  const H=hy.hack, all=H.pts.concat(H.excl);
+  if(!all.length){ axes(f,"A (km²)","L (km)"); S.textContent="no basins"; return; }
+  const xs=all.map(p=>Math.log10(p[0])), ys=all.map(p=>Math.log10(p[1]));
+  const x0=Math.floor(Math.min(...xs)), x1=Math.ceil(Math.max(...xs));
+  const y0=Math.floor(Math.min(...ys)), y1=Math.ceil(Math.max(...ys));
+  const px=v=>f.L+(v-x0)/((x1-x0)||1)*(f.w-f.L-f.R);
+  const py=v=>(f.h-f.B)-(v-y0)/((y1-y0)||1)*(f.h-f.B-f.T);
+  cx.strokeStyle=CSS.grid; cx.lineWidth=1; cx.font="8px ui-monospace,monospace"; cx.fillStyle=CSS.faint;
+  for(let d=x0;d<=x1;d++){ cx.beginPath();cx.moveTo(px(d),f.T);cx.lineTo(px(d),f.h-f.B);cx.stroke();
+    cx.textAlign="center"; cx.fillText("10"+sup(d),px(d),f.h-f.B+11); }
+  for(let d=y0;d<=y1;d++){ cx.beginPath();cx.moveTo(f.L,py(d));cx.lineTo(f.w-f.R,py(d));cx.stroke();
+    cx.textAlign="right"; cx.fillText("10"+sup(d),f.L-4,py(d)+3); }
+  axes(f,"drainage area A (km²)","L (km)");
+  if(H.n>=3){
+    const mx=H.pts.reduce((s,p)=>s+Math.log10(p[0]),0)/H.n;
+    const my=H.pts.reduce((s,p)=>s+Math.log10(p[1]),0)/H.n;
+    const a=my-0.6*mx;
+    cx.setLineDash([3,3]); cx.strokeStyle=CSS.faint; cx.lineWidth=1.4; cx.beginPath();
+    cx.moveTo(px(x0),py(a+0.6*x0)); cx.lineTo(px(x1),py(a+0.6*x1)); cx.stroke(); cx.setLineDash([]);
+  }
+  cx.globalAlpha=.8;
+  for(const p of H.excl){ cx.fillStyle=CSS.red;
+    cx.beginPath(); cx.arc(px(Math.log10(p[0])),py(Math.log10(p[1])),2.3,0,7); cx.fill(); }
+  for(const p of H.pts){ cx.fillStyle=CSS.blue;
+    cx.beginPath(); cx.arc(px(Math.log10(p[0])),py(Math.log10(p[1])),2.7,0,7); cx.fill(); }
+  cx.globalAlpha=1;
+  if(H.n>=3){
+    const a=Math.log10(H.k);
+    cx.strokeStyle=CSS.accent; cx.lineWidth=1.6; cx.beginPath();
+    cx.moveTo(px(x0),py(a+H.h*x0)); cx.lineTo(px(x1),py(a+H.h*x1)); cx.stroke();
+  }
+  S.innerHTML = H.n>=3
+    ? `h = <b>${H.h.toFixed(3)}</b> <span class="sep">·</span> k = <b>${H.k.toFixed(2)}</b> <span class="sep">·</span> R² = <b>${H.r2.toFixed(3)}</b> <span class="sep">·</span> n = <b>${H.n}</b><br>`+
+      `<span class="sep">dotted =</span> Hack (1957) h = 0.60 <span class="sep">·</span> <span style="color:${CSS.red}">red</span> excluded A&lt;1 or L&lt;1 (n=${H.excl.length})`
+    : `too few basins to fit (n=${H.n})`;
+}
+function sup(d){ const m={"-":"⁻","0":"⁰","1":"¹","2":"²","3":"³","4":"⁴","5":"⁵","6":"⁶","7":"⁷","8":"⁸","9":"⁹"};
+  return String(d).split("").map(c=>m[c]||c).join(""); }
+
+function chartHorton(hy){
+  const f=frame(document.getElementById("c_horton")), cx=f.cx, S=document.getElementById("s_horton");
+  const O=hy.horton.orders;
+  if(O.length<2){ axes(f,"Strahler order ω","N"); S.textContent="need ≥2 orders — lower min_acc"; return; }
+  const xs=O.map(d=>d.o), ys=O.map(d=>Math.log10(d.N));
+  const x0=Math.min(...xs)-0.45, x1=Math.max(...xs)+0.45;
+  const y0=Math.min(...ys)-0.3, y1=Math.max(...ys)+0.3;
+  const px=v=>f.L+(v-x0)/((x1-x0)||1)*(f.w-f.L-f.R);
+  const py=v=>(f.h-f.B)-(v-y0)/((y1-y0)||1)*(f.h-f.B-f.T);
+  cx.strokeStyle=CSS.grid; cx.font="8px ui-monospace,monospace"; cx.fillStyle=CSS.faint;
+  for(const d of O){ cx.beginPath();cx.moveTo(px(d.o),f.T);cx.lineTo(px(d.o),f.h-f.B);cx.stroke();
+    cx.textAlign="center"; cx.fillText("ω"+d.o,px(d.o),f.h-f.B+11); }
+  for(let d=Math.ceil(y0);d<=Math.floor(y1);d++){ cx.beginPath();cx.moveTo(f.L,py(d));cx.lineTo(f.w-f.R,py(d));cx.stroke();
+    cx.textAlign="right"; cx.fillText("10"+sup(d),f.L-4,py(d)+3); }
+  axes(f,"Strahler order ω","number of streams N");
+  const n=xs.length, mx=xs.reduce((a,b)=>a+b,0)/n, my=ys.reduce((a,b)=>a+b,0)/n;
+  let sxy=0,sxx=0; for(let i=0;i<n;i++){sxy+=(xs[i]-mx)*(ys[i]-my);sxx+=(xs[i]-mx)*(xs[i]-mx);}
+  const b=sxx?sxy/sxx:0, a=my-b*mx;
+  cx.strokeStyle=CSS.accent; cx.lineWidth=1.6; cx.beginPath();
+  cx.moveTo(px(x0),py(a+b*x0)); cx.lineTo(px(x1),py(a+b*x1)); cx.stroke();
+  for(let i=0;i<O.length;i++){
+    cx.fillStyle=CSS.blue; cx.beginPath(); cx.arc(px(xs[i]),py(ys[i]),3.3,0,7); cx.fill();
+    cx.fillStyle=CSS.muted; cx.textAlign="left"; cx.fillText("N="+O[i].N,px(xs[i])+6,py(ys[i])-4);
+  }
+  const h=hy.horton;
+  S.innerHTML=`R<sub>b</sub> = <b>${h.Rb.toFixed(2)}</b> <span class="sep">·</span> R<sub>l</sub> = <b>${h.Rl.toFixed(2)}</b> `+
+    `<span class="sep">·</span> R<sub>a</sub> = <b>${h.Ra.toFixed(2)}</b> <span class="sep">·</span> R² = <b>${h.r2.toFixed(3)}</b><br>`+
+    `<span class="sep">natural range</span> R<sub>b</sub> 3–5 · R<sub>l</sub> 1.5–3.5 · R<sub>a</sub> 3–6`;
+}
+
+function chartProfile(hy){
+  const f=frame(document.getElementById("c_prof")), cx=f.cx, S=document.getElementById("s_prof");
+  const p=hy.prof;
+  if(!p||p.d.length<2){ axes(f,"distance (km)","elevation (m)"); S.textContent="no profile"; return; }
+  const x1=Math.max(...p.d)||1, y1=Math.max(...p.e)||1;
+  const px=v=>f.L+v/x1*(f.w-f.L-f.R);
+  const py=v=>(f.h-f.B)-v/y1*(f.h-f.B-f.T);
+  cx.strokeStyle=CSS.grid; cx.font="8px ui-monospace,monospace"; cx.fillStyle=CSS.faint;
+  for(let i=0;i<=4;i++){
+    const xv=x1*i/4, yv=y1*i/4;
+    cx.beginPath();cx.moveTo(px(xv),f.T);cx.lineTo(px(xv),f.h-f.B);cx.stroke();
+    cx.textAlign="center"; cx.fillText(xv.toFixed(0),px(xv),f.h-f.B+11);
+    cx.beginPath();cx.moveTo(f.L,py(yv));cx.lineTo(f.w-f.R,py(yv));cx.stroke();
+    cx.textAlign="right"; cx.fillText(yv.toFixed(0),f.L-4,py(yv)+3);
+  }
+  axes(f,"distance downstream (km)","elevation (m)");
+  cx.beginPath(); cx.moveTo(px(p.d[0]),py(p.e[0]));
+  for(let i=1;i<p.d.length;i++) cx.lineTo(px(p.d[i]),py(p.e[i]));
+  cx.lineTo(px(p.d[p.d.length-1]),f.h-f.B); cx.lineTo(px(p.d[0]),f.h-f.B); cx.closePath();
+  cx.fillStyle="rgba(59,130,232,0.16)"; cx.fill();
+  cx.beginPath(); cx.moveTo(px(p.d[0]),py(p.e[0]));
+  for(let i=1;i<p.d.length;i++) cx.lineTo(px(p.d[i]),py(p.e[i]));
+  cx.strokeStyle=CSS.blue; cx.lineWidth=1.8; cx.stroke();
+  const relief=p.e[0]-p.e[p.e.length-1];
+  S.innerHTML=`A = <b>${p.area.toFixed(0)} km²</b> <span class="sep">·</span> main channel <b>${p.len.toFixed(1)} km</b><br>`+
+    `relief <b>${relief.toFixed(0)} m</b> <span class="sep">·</span> mean slope <b>${(relief/(p.len*1000)*100).toFixed(2)}%</b>`;
+}
+
+/* ---------- exports ---------- */
+function download(blob,name){
+  const u=URL.createObjectURL(blob),a=document.createElement("a");
+  a.href=u;a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(u),1500);
+}
+document.getElementById("npy").onclick=()=>{
+  if(!lastResult)return;
+  const {z,w,h,seed}=lastResult;
+  let hdr=`{'descr': '<f4', 'fortran_order': False, 'shape': (${h}, ${w}), }`;
+  const pad=(64-((10+hdr.length+1)%64))%64; hdr=hdr+" ".repeat(pad)+"\n";
+  const buf=new ArrayBuffer(10+hdr.length+z.byteLength), dv=new DataView(buf);
+  dv.setUint8(0,0x93); "NUMPY".split("").forEach((c,i)=>dv.setUint8(1+i,c.charCodeAt(0)));
+  dv.setUint8(6,1); dv.setUint8(7,0); dv.setUint16(8,hdr.length,true);
+  for(let i=0;i<hdr.length;i++) dv.setUint8(10+i,hdr.charCodeAt(i));
+  new Float32Array(buf,10+hdr.length).set(z);
+  download(new Blob([buf],{type:"application/octet-stream"}),`terrain_seed${String(seed).padStart(3,"0")}_${w}.npy`);
+};
+document.getElementById("csv").onclick=()=>{
+  if(!lastResult||!lastResult.hy)return;
+  const H=lastResult.hy.hack;
+  let s="area_km2,longest_channel_km,included\n";
+  for(const p of H.pts)  s+=`${p[0].toFixed(4)},${p[1].toFixed(4)},1\n`;
+  for(const p of H.excl) s+=`${p[0].toFixed(4)},${p[1].toFixed(4)},0\n`;
+  s+="\n# order,N,mean_length_km,mean_area_km2\n";
+  for(const o of lastResult.hy.horton.orders) s+=`# ${o.o},${o.N},${o.Lbar.toFixed(4)},${o.Abar.toFixed(4)}\n`;
+  s+=`# hack_h=${H.h.toFixed(4)} hack_k=${H.k.toFixed(4)} hack_r2=${H.r2.toFixed(4)}\n`;
+  s+=`# Rb=${lastResult.hy.horton.Rb.toFixed(4)} Rl=${lastResult.hy.horton.Rl.toFixed(4)} Ra=${lastResult.hy.horton.Ra.toFixed(4)}\n`;
+  download(new Blob([s],{type:"text/csv"}),`basins_seed${String(lastResult.seed).padStart(3,"0")}_${lastResult.w}.csv`);
+};
+document.getElementById("png").onclick=()=>{
+  renderer.render(scene,camera);
+  canvas.toBlob(b=>{ if(b) download(b,`terrain_seed${lastResult?lastResult.seed:0}.png`); });
+};
+document.getElementById("reset").onclick=()=>{
+  SPEC.forEach(s=>{ inputs[s.key].value=s.def; document.getElementById("v_"+s.key).textContent=fmt(s,s.def); });
+  requestCompute();
+};
+
+resize(); updateCam(); requestCompute();
+</script>
+</body>
+</html>

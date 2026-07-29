@@ -1,0 +1,500 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+<title>Terrain — faithful preview</title>
+<style>
+  :root{
+    --bg:#0e1318; --panel:#151d24; --panel2:#1b242d; --line:#27333d;
+    --ink:#e8edf1; --muted:#8493a0; --faint:#5a6772;
+    --accent:#e8a24a; --accent-dim:#7d5a2a; --good:#5bb98c;
+    --mono:ui-monospace,"JetBrains Mono","SF Mono",Menlo,Consolas,monospace;
+    --sans:ui-sans-serif,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%;background:var(--bg);color:var(--ink);font-family:var(--sans);-webkit-font-smoothing:antialiased}
+  #app{display:flex;height:100vh;width:100vw;overflow:hidden}
+
+  /* ---- viewport ---- */
+  #viewport{position:relative;flex:1 1 auto;min-width:0;background:
+    radial-gradient(120% 90% at 50% 0%, #16202a 0%, var(--bg) 70%)}
+  #gl{display:block;width:100%;height:100%;touch-action:none;cursor:grab}
+  #gl:active{cursor:grabbing}
+  #hud{position:absolute;left:18px;top:16px;pointer-events:none;font-family:var(--mono);font-size:12px;letter-spacing:.02em}
+  #hud .t{color:var(--accent);font-size:13px;letter-spacing:.18em;text-transform:uppercase}
+  #hud .s{color:var(--muted);margin-top:4px}
+  #readout{position:absolute;left:18px;bottom:14px;font-family:var(--mono);font-size:12.5px;color:var(--muted);
+    border-left:2px solid var(--accent-dim);padding-left:10px;pointer-events:none}
+  #readout b{color:var(--ink);font-weight:500}
+  #readout.computing b{color:var(--accent)}
+  @media (prefers-reduced-motion: no-preference){
+    #readout.computing #dot{animation:pulse 1s ease-in-out infinite}
+  }
+  #dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--faint);margin-right:7px;vertical-align:middle}
+  #readout.computing #dot{background:var(--accent)}
+  @keyframes pulse{0%,100%{opacity:.35}50%{opacity:1}}
+
+  /* ---- panel ---- */
+  #panel{flex:0 0 348px;background:var(--panel);border-left:1px solid var(--line);
+    display:flex;flex-direction:column;overflow:hidden}
+  #phead{padding:18px 20px 14px;border-bottom:1px solid var(--line)}
+  #phead h1{margin:0;font-family:var(--mono);font-size:13px;letter-spacing:.16em;text-transform:uppercase;color:var(--ink)}
+  #phead p{margin:7px 0 0;font-size:12px;line-height:1.5;color:var(--muted)}
+  #phead code{font-family:var(--mono);color:var(--accent);font-size:11.5px}
+  #controls{padding:8px 20px 4px;overflow-y:auto;flex:1 1 auto}
+
+  .row{padding:11px 0;border-bottom:1px solid #1f2932}
+  .row:last-child{border-bottom:none}
+  .rl{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:8px}
+  .rl .name{font-size:11px;letter-spacing:.06em;color:var(--muted);text-transform:none;font-family:var(--mono)}
+  .rl .val{font-family:var(--mono);font-size:13px;color:var(--ink);font-variant-numeric:tabular-nums}
+  .rl .val .u{color:var(--faint);font-size:11px;margin-left:3px}
+  .intpill{color:var(--accent);font-size:9px;letter-spacing:.1em;border:1px solid var(--accent-dim);border-radius:3px;padding:0 4px;margin-left:6px;vertical-align:1px}
+
+  input[type=range]{-webkit-appearance:none;appearance:none;width:100%;height:3px;background:#2b3742;border-radius:3px;outline:none}
+  input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;appearance:none;width:15px;height:15px;border-radius:50%;
+    background:var(--ink);border:2px solid var(--bg);box-shadow:0 0 0 1px var(--line);cursor:pointer;transition:background .12s}
+  input[type=range]::-webkit-slider-thumb:hover{background:var(--accent)}
+  input[type=range]::-moz-range-thumb{width:14px;height:14px;border-radius:50%;background:var(--ink);border:2px solid var(--bg);cursor:pointer}
+  input[type=range]:focus-visible::-webkit-slider-thumb{box-shadow:0 0 0 2px var(--accent)}
+
+  .seg{display:flex;gap:4px}
+  .seg button{flex:1;font-family:var(--mono);font-size:11px;color:var(--muted);background:var(--panel2);
+    border:1px solid var(--line);border-radius:4px;padding:5px 0;cursor:pointer;transition:.12s}
+  .seg button:hover{color:var(--ink)}
+  .seg button.on{color:var(--bg);background:var(--accent);border-color:var(--accent);font-weight:600}
+
+  #held{margin:6px 0 2px;font-size:11px}
+  #held summary{cursor:pointer;color:var(--faint);font-family:var(--mono);letter-spacing:.04em;list-style:none}
+  #held summary::-webkit-details-marker{display:none}
+  #held summary::before{content:"+ ";color:var(--accent-dim)}
+  #held[open] summary::before{content:"– "}
+  #held .kv{font-family:var(--mono);font-size:10.5px;color:var(--muted);line-height:1.7;margin-top:6px;padding-left:2px}
+  #held .kv span{color:var(--faint)}
+
+  #pfoot{padding:14px 20px;border-top:1px solid var(--line);display:flex;flex-direction:column;gap:9px}
+  .btns{display:flex;gap:8px}
+  .btn{flex:1;font-family:var(--mono);font-size:11.5px;letter-spacing:.03em;color:var(--ink);background:var(--panel2);
+    border:1px solid var(--line);border-radius:5px;padding:9px 0;cursor:pointer;transition:.12s}
+  .btn:hover{border-color:var(--accent);color:var(--accent)}
+  .btn.primary{color:var(--accent)}
+  #hint{font-family:var(--mono);font-size:10.5px;color:var(--faint);line-height:1.5}
+
+  @media (max-width:820px){
+    #app{flex-direction:column}
+    #viewport{flex:0 0 52vh;height:52vh}
+    #panel{flex:1 1 auto;border-left:none;border-top:1px solid var(--line)}
+  }
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="viewport">
+    <canvas id="gl"></canvas>
+    <div id="hud">
+      <div class="t">Terrain</div>
+      <div class="s">faithful Float64 preview</div>
+    </div>
+    <div id="readout"><span id="dot"></span><span id="rtext">initializing…</span></div>
+  </div>
+
+  <aside id="panel">
+    <div id="phead">
+      <h1>Parameters</h1>
+      <p>Same pipeline as the Julia notebook — value-noise FBM with analytic gradients. Computed in <code>Float64</code> with an exact 64-bit hash, so elevations match the reference.</p>
+    </div>
+    <div id="controls"><!-- sliders injected --></div>
+    <div id="pfoot">
+      <div class="btns">
+        <button class="btn" id="reset">Reset</button>
+        <button class="btn" id="png">Save PNG</button>
+        <button class="btn primary" id="npy">Download .npy</button>
+      </div>
+      <div id="hint">.npy holds height_m (Float32, shape H×W). Compare it against your Julia export for the same seed to check fidelity.</div>
+    </div>
+  </aside>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+"use strict";
+
+/* =====================================================================
+   1) FAITHFUL COMPUTE SOURCE  (ported 1:1 from the Julia notebook)
+   Runs in a Web Worker; also reused on the main thread as a fallback.
+   ===================================================================== */
+const COMPUTE_SRC = `
+const M64 = (1n << 64n) - 1n;
+function hash33(ix, iy, iz, seed){
+  const ux = BigInt.asUintN(64, BigInt(ix));
+  const uy = BigInt.asUintN(64, BigInt(iy));
+  const uz = BigInt.asUintN(64, BigInt(iz));
+  const us = BigInt.asUintN(64, BigInt(seed));
+  const a = (ux * 0x9E3779B185EBCA87n) & M64;
+  const b = (uy * 0xC2B2AE3D27D4EB4Fn) & M64;
+  const c = (uz * 0x165667B19E3779F9n) & M64;
+  const d = (us * 0x85EBCA77C2B2AE63n) & M64;
+  let h = (a ^ b ^ c ^ d) & M64;
+  h ^= (h >> 33n); h &= M64;
+  h = (h * 0xff51afd7ed558ccdn) & M64;
+  h ^= (h >> 33n); h &= M64;
+  h = (h * 0xc4ceb9fe1a85ec53n) & M64;
+  h ^= (h >> 33n); h &= M64;
+  return Number(h & 0xFFFFFFFFn) / 4294967295;
+}
+function ss5(t){ return t*t*t*(t*(t*6-15)+10); }
+function dss5(t){ return 30*t*t*(t-1)*(t-1); }
+function valNoise(x,y,z,seed){
+  const ix=Math.floor(x), iy=Math.floor(y), iz=Math.floor(z);
+  const fx=x-ix, fy=y-iy, fz=z-iz;
+  const u=ss5(fx), v=ss5(fy), w=ss5(fz);
+  const du=dss5(fx), dv=dss5(fy), dw=dss5(fz);
+  const c000=hash33(ix,iy,iz,seed),   c100=hash33(ix+1,iy,iz,seed);
+  const c010=hash33(ix,iy+1,iz,seed), c110=hash33(ix+1,iy+1,iz,seed);
+  const c001=hash33(ix,iy,iz+1,seed), c101=hash33(ix+1,iy,iz+1,seed);
+  const c011=hash33(ix,iy+1,iz+1,seed), c111=hash33(ix+1,iy+1,iz+1,seed);
+  const x00=(1-u)*c000+u*c100, x10=(1-u)*c010+u*c110;
+  const x01=(1-u)*c001+u*c101, x11=(1-u)*c011+u*c111;
+  const y0=(1-v)*x00+v*x10, y1=(1-v)*x01+v*x11;
+  const val=(1-w)*y0+w*y1;
+  const dx00=c100-c000, dx10=c110-c010, dx01=c101-c001, dx11=c111-c011;
+  const dy0=x10-x00, dy1=x11-x01, dz=y1-y0;
+  const ddx=du*((1-w)*((1-v)*dx00+v*dx10)+w*((1-v)*dx01+v*dx11));
+  const ddy=dv*((1-w)*dy0+w*dy1);
+  const ddz=dw*dz;
+  return [val,ddx,ddy,ddz];
+}
+function fbm(x,y,z,octaves,lac,gain,k,klist,seed){
+  let total=0, amp=1, freq=1, norm=0;
+  for(let o=1;o<=octaves;o++){
+    const kval = klist ? klist[Math.min(o,klist.length)-1] : k;
+    const r = valNoise(x*freq,y*freq,z*freq, seed+1013*o);
+    const val = 2*r[0]-1;
+    const dx=2*r[1], dy=2*r[2], dz=2*r[3];
+    const g = Math.sqrt(dx*dx+dy*dy+dz*dz);
+    const wt = 1/(1+kval*g);
+    total += amp*wt*val;
+    norm += amp; amp*=gain; freq*=lac;
+  }
+  return total/norm;
+}
+function computeTerrain(P){
+  const W=P.res|0, H=P.res|0;
+  const octaves=Math.max(1,Math.round(P.octaves));
+  const seed=Math.round(P.seed);
+  const lac=Math.max(P.lacunarity,1e-3);
+  const gain=Math.min(Math.max(P.gain,0.05),1.0);
+  const k=Math.max(P.k,0);
+  const dom=Math.max(P.domain,1e-3);
+  const shp=Math.max(P.shaping,0);
+  const rs=Math.max(P.radial_strength,1e-3);
+  const re=Math.max(P.radial_exponent,1e-3);
+  const maxE=Math.max(P.max_elev,1e-3), minE=0.0;
+  // held-constant warp + slice + per-octave weights
+  const klist=[0.6,0.8,1.0,1.4,1.8,2.5,3.5];
+  const z=0.2, ws=0.04, wf=0.6, woct=2, wg=0.5, wlac=2.0, waniso=0.7;
+
+  const raw=new Float64Array(W*H);
+  for(let j=0;j<H;j++){
+    const y=j/(H-1)*dom;
+    for(let i=0;i<W;i++){
+      const x=i/(W-1)*dom;
+      const wv=fbm(x*wf, y*wf, z, woct, wlac, wg, 1.0, null, seed);
+      const xw=x+ws*wv, yw=y+ws*(waniso*wv);
+      raw[j*W+i]=fbm(xw, yw, z, octaves, lac, gain, k, klist, seed);
+    }
+  }
+  // normalize to [0,1]
+  let mn=Infinity,mx=-Infinity;
+  for(let n=0;n<raw.length;n++){const v=raw[n]; if(v<mn)mn=v; if(v>mx)mx=v;}
+  let inv=1/((mx-mn)+1e-12);
+  for(let n=0;n<raw.length;n++) raw[n]=(raw[n]-mn)*inv;
+  // shaping
+  for(let n=0;n<raw.length;n++){const hh=raw[n]; raw[n]=Math.pow(hh, 1+shp*hh);}
+  // radial falloff (1-based centers, matching Julia)
+  const cx=(W+1)/2, cy=(H+1)/2;
+  for(let j=0;j<H;j++){ for(let i=0;i<W;i++){
+    const rx=(i+1-cx)/(0.5*W), ry=(j+1-cy)/(0.5*H);
+    const r=Math.sqrt(rx*rx+ry*ry);
+    raw[j*W+i]*=Math.exp(-(rs*Math.pow(r,re)));
+  }}
+  // renormalize + scale to metres
+  mn=Infinity;mx=-Infinity;
+  for(let n=0;n<raw.length;n++){const v=raw[n]; if(v<mn)mn=v; if(v>mx)mx=v;}
+  inv=1/((mx-mn)+1e-12);
+  const z32=new Float32Array(W*H);
+  let zmin=Infinity,zmax=-Infinity;
+  for(let n=0;n<raw.length;n++){
+    let e=minE+(maxE-minE)*((raw[n]-mn)*inv);
+    if(e<minE)e=minE; else if(e>maxE)e=maxE;
+    z32[n]=e; if(e<zmin)zmin=e; if(e>zmax)zmax=e;
+  }
+  return {z:z32, w:W, h:H, min:zmin, max:zmax, maxElev:maxE, seed:seed};
+}
+`;
+
+/* worker (preferred) with main-thread fallback */
+let worker=null, computeMain=null;
+try{
+  const blob=new Blob([COMPUTE_SRC + "\nself.onmessage=function(e){var r=computeTerrain(e.data);self.postMessage(r,[r.z.buffer]);};"],
+                      {type:"application/javascript"});
+  worker=new Worker(URL.createObjectURL(blob));
+  worker.onmessage=e=>onResult(e.data);
+}catch(err){ worker=null; }
+if(!worker){
+  try{ computeMain=(new Function(COMPUTE_SRC+"; return computeTerrain;"))(); }
+  catch(e){ console.error("compute init failed",e); }
+}
+
+/* =====================================================================
+   2) CONTROLS
+   ===================================================================== */
+const SPEC=[
+  {key:"octaves",        min:1,    max:10,   step:1,    def:6,    int:true},
+  {key:"lacunarity",     min:0.5,  max:5.5,  step:0.05, def:2.0,  dp:2},
+  {key:"gain",           min:0.10, max:1.0,  step:0.005,def:0.55, dp:3},
+  {key:"k",              min:0.5,  max:15.0, step:0.1,  def:1.0,  dp:2},
+  {key:"domain",         min:0.1,  max:15.0, step:0.05, def:10.0, dp:2},
+  {key:"shaping",        min:0.1,  max:5.0,  step:0.05, def:1.8,  dp:2},
+  {key:"radial_strength",min:0.1,  max:2.5,  step:0.02, def:1.0,  dp:2},
+  {key:"radial_exponent",min:0.1,  max:7.5,  step:0.05, def:2.0,  dp:2},
+  {key:"max_elev",       min:500,  max:5500, step:10,   def:2500, dp:0, unit:"m"},
+  {key:"seed",           min:1,    max:100,  step:1,    def:1,    int:true},
+];
+const RES_OPTS=[96,128,160,192,256];
+let RES=128, EXAGG=1.0;
+
+const inputs={};
+const ctr=document.getElementById("controls");
+
+function fmt(s,v){ return s.int ? String(Math.round(v)) : v.toFixed(s.dp); }
+
+SPEC.forEach(s=>{
+  const row=document.createElement("div"); row.className="row";
+  row.innerHTML=
+    `<div class="rl"><span class="name">${s.key}${s.int?'<span class="intpill">INT</span>':''}</span>`+
+    `<span class="val"><span id="v_${s.key}">${fmt(s,s.def)}</span>${s.unit?`<span class="u">${s.unit}</span>`:''}</span></div>`+
+    `<input type="range" id="i_${s.key}" min="${s.min}" max="${s.max}" step="${s.step}" value="${s.def}">`;
+  ctr.appendChild(row);
+  const inp=row.querySelector("input");
+  inputs[s.key]=inp;
+  inp.addEventListener("input",()=>{ document.getElementById("v_"+s.key).textContent=fmt(s,parseFloat(inp.value)); requestCompute(); });
+});
+
+/* resolution segmented control (display/compute grid) */
+(function(){
+  const row=document.createElement("div"); row.className="row";
+  row.innerHTML=`<div class="rl"><span class="name">preview grid</span><span class="val" id="v_res">${RES}²</span></div><div class="seg" id="resseg"></div>`;
+  ctr.appendChild(row);
+  const seg=row.querySelector("#resseg");
+  RES_OPTS.forEach(r=>{
+    const b=document.createElement("button"); b.textContent=r; if(r===RES)b.className="on";
+    b.onclick=()=>{ RES=r; document.getElementById("v_res").textContent=r+"²";
+      [...seg.children].forEach(c=>c.classList.remove("on")); b.classList.add("on"); requestCompute(); };
+    seg.appendChild(b);
+  });
+})();
+
+/* vertical exaggeration (display only — does not change the data) */
+(function(){
+  const row=document.createElement("div"); row.className="row";
+  row.innerHTML=`<div class="rl"><span class="name">vertical exaggeration</span><span class="val" id="v_ex">${EXAGG.toFixed(2)}×</span></div>`+
+    `<input type="range" id="i_ex" min="0.3" max="3" step="0.05" value="1">`;
+  ctr.appendChild(row);
+  row.querySelector("input").addEventListener("input",e=>{
+    EXAGG=parseFloat(e.target.value); document.getElementById("v_ex").textContent=EXAGG.toFixed(2)+"×";
+    if(lastResult) applyMesh(lastResult);
+  });
+})();
+
+/* held-constant disclosure */
+(function(){
+  const d=document.createElement("details"); d.id="held";
+  d.innerHTML=`<summary>held constant</summary><div class="kv">`+
+    `<span>warp_strength</span> 0.04 &nbsp; <span>warp_freq</span> 0.6 &nbsp; <span>warp_octaves</span> 2<br>`+
+    `<span>warp_gain</span> 0.5 &nbsp; <span>warp_lacunarity</span> 2.0 &nbsp; <span>warp_anisotropy</span> 0.7<br>`+
+    `<span>z</span> 0.2 &nbsp; <span>min_elev</span> 0<br>`+
+    `<span>klist</span> [0.6, 0.8, 1.0, 1.4, 1.8, 2.5, 3.5]</div>`;
+  ctr.appendChild(d);
+})();
+
+function currentParams(){
+  const p={res:RES};
+  SPEC.forEach(s=>p[s.key]=parseFloat(inputs[s.key].value));
+  return p;
+}
+
+/* =====================================================================
+   3) COMPUTE SCHEDULING (latest-wins, never overlaps)
+   ===================================================================== */
+let busy=false, pending=null, lastResult=null;
+const readout=document.getElementById("readout");
+const rtext=document.getElementById("rtext");
+
+function requestCompute(){ pending=currentParams(); pump(); }
+function pump(){
+  if(busy||!pending) return;
+  const p=pending; pending=null; busy=true;
+  readout.classList.add("computing"); rtext.textContent="computing…";
+  if(worker) worker.postMessage(p);
+  else setTimeout(()=>{ try{ onResult(computeMain(p)); }catch(e){ console.error(e); busy=false; } },0);
+}
+function onResult(r){
+  busy=false; lastResult=r; applyMesh(r);
+  readout.classList.remove("computing");
+  rtext.innerHTML=`elevation <b>${r.min.toFixed(0)}–${r.max.toFixed(0)} m</b> · ${r.w}² grid · seed ${r.seed}`;
+  pump();
+}
+
+/* =====================================================================
+   4) THREE.JS RENDER  (faithful data -> GPU mesh)
+   ===================================================================== */
+const KM_SPAN=100;                 // terrain is 100 km across (world units)
+const Z_SPAN=50;                   // full max_elev maps to 50 world units (Makie aspect 0.5)
+const MAX_CEIL=5500;
+const yScale=()=> EXAGG * (Z_SPAN/MAX_CEIL);
+
+const canvas=document.getElementById("gl");
+const renderer=new THREE.WebGLRenderer({canvas, antialias:true, preserveDrawingBuffer:true});
+renderer.setPixelRatio(Math.min(window.devicePixelRatio,2));
+const scene=new THREE.Scene();
+scene.background=new THREE.Color(0x0e1318);
+scene.fog=new THREE.Fog(0x0e1318, 220, 460);
+
+const camera=new THREE.PerspectiveCamera(42, 1, 0.5, 2000);
+scene.add(new THREE.AmbientLight(0xffffff,0.62));
+const sun=new THREE.DirectionalLight(0xffffff,0.65); sun.position.set(-0.6,1,0.35); scene.add(sun);
+const sun2=new THREE.DirectionalLight(0x9fb6c8,0.18); sun2.position.set(0.7,0.4,-0.6); scene.add(sun2);
+
+let geom=null, mesh=null, geoRes=0, basePos=null;
+
+function buildGeometry(res){
+  if(mesh){ scene.remove(mesh); geom.dispose(); mesh.material.dispose(); }
+  geom=new THREE.BufferGeometry();
+  const N=res*res;
+  const pos=new Float32Array(N*3);
+  const col=new Float32Array(N*3);
+  for(let r=0;r<res;r++){
+    const zc=r/(res-1)*KM_SPAN;
+    for(let c=0;c<res;c++){
+      const idx=(r*res+c)*3;
+      pos[idx]=c/(res-1)*KM_SPAN; pos[idx+1]=0; pos[idx+2]=zc;
+    }
+  }
+  const idx=new Uint32Array((res-1)*(res-1)*6);
+  let t=0;
+  for(let r=0;r<res-1;r++) for(let c=0;c<res-1;c++){
+    const a=r*res+c, b=a+1, d=a+res, e=d+1;
+    idx[t++]=a; idx[t++]=d; idx[t++]=b;
+    idx[t++]=b; idx[t++]=d; idx[t++]=e;
+  }
+  geom.setAttribute("position",new THREE.BufferAttribute(pos,3));
+  geom.setAttribute("color",new THREE.BufferAttribute(col,3));
+  geom.setIndex(new THREE.BufferAttribute(idx,1));
+  const mat=new THREE.MeshPhongMaterial({vertexColors:true, shininess:6, specular:0x101418, side:THREE.DoubleSide, flatShading:false});
+  mesh=new THREE.Mesh(geom,mat); scene.add(mesh);
+  geoRes=res; basePos=pos;
+}
+
+/* matplotlib-style 'terrain' colormap */
+const CMAP=[[0,0.20,0.20,0.60],[0.15,0.0,0.60,1.0],[0.25,0.0,0.80,0.40],[0.50,1.0,1.0,0.60],[0.75,0.50,0.36,0.33],[1.0,1.0,1.0,1.0]];
+function cmap(t){
+  if(t<=0)return CMAP[0]; if(t>=1)return CMAP[CMAP.length-1];
+  for(let i=1;i<CMAP.length;i++){ if(t<=CMAP[i][0]){
+    const a=CMAP[i-1],b=CMAP[i],f=(t-a[0])/(b[0]-a[0]);
+    return [a[1]+(b[1]-a[1])*f, a[2]+(b[2]-a[2])*f, a[3]+(b[3]-a[3])*f];
+  }}
+  return CMAP[CMAP.length-1];
+}
+
+function applyMesh(r){
+  if(geoRes!==r.w) buildGeometry(r.w);
+  const pos=geom.attributes.position.array;
+  const col=geom.attributes.color.array;
+  const ys=yScale(), span=(r.max-r.min)||1;
+  for(let n=0;n<r.z.length;n++){
+    const e=r.z[n];
+    pos[n*3+1]=e*ys;
+    const c=cmap((e-r.min)/span);
+    col[n*3]=c[0]; col[n*3+1]=c[1]; col[n*3+2]=c[2];
+  }
+  geom.attributes.position.needsUpdate=true;
+  geom.attributes.color.needsUpdate=true;
+  geom.computeVertexNormals();
+}
+
+/* ---- minimal orbit (drag rotate, wheel/pinch zoom) ---- */
+let theta=Math.PI*1.275, phi=Math.PI*0.36, radius=190;
+const target=new THREE.Vector3(KM_SPAN/2, 7, KM_SPAN/2);
+const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
+function updateCam(){
+  const sp=Math.sin(phi);
+  camera.position.set(target.x+radius*sp*Math.cos(theta), target.y+radius*Math.cos(phi), target.z+radius*sp*Math.sin(theta));
+  camera.lookAt(target);
+}
+const ptrs=new Map(); let lastPinch=0;
+canvas.addEventListener("pointerdown",e=>{ canvas.setPointerCapture(e.pointerId); ptrs.set(e.pointerId,{x:e.clientX,y:e.clientY}); });
+canvas.addEventListener("pointerup",e=>{ ptrs.delete(e.pointerId); lastPinch=0; });
+canvas.addEventListener("pointercancel",e=>{ ptrs.delete(e.pointerId); lastPinch=0; });
+canvas.addEventListener("pointermove",e=>{
+  if(!ptrs.has(e.pointerId))return;
+  const prev=ptrs.get(e.pointerId); const dx=e.clientX-prev.x, dy=e.clientY-prev.y;
+  ptrs.set(e.pointerId,{x:e.clientX,y:e.clientY});
+  if(ptrs.size>=2){
+    const pa=[...ptrs.values()]; const d=Math.hypot(pa[0].x-pa[1].x, pa[0].y-pa[1].y);
+    if(lastPinch) radius=clamp(radius*(lastPinch/d),60,420);
+    lastPinch=d;
+  }else{
+    theta-=dx*0.005; phi=clamp(phi-dy*0.005, 0.06, Math.PI*0.49);
+  }
+  updateCam();
+});
+canvas.addEventListener("wheel",e=>{ e.preventDefault(); radius=clamp(radius*(1+e.deltaY*0.0011),60,420); updateCam(); },{passive:false});
+
+function resize(){
+  const w=canvas.clientWidth||window.innerWidth, h=canvas.clientHeight||window.innerHeight;
+  renderer.setSize(w,h,false); camera.aspect=w/h; camera.updateProjectionMatrix();
+}
+window.addEventListener("resize",resize);
+
+(function loop(){ requestAnimationFrame(loop); renderer.render(scene,camera); })();
+
+/* =====================================================================
+   5) EXPORTS
+   ===================================================================== */
+function download(blob,name){
+  const u=URL.createObjectURL(blob), a=document.createElement("a");
+  a.href=u; a.download=name; a.click(); setTimeout(()=>URL.revokeObjectURL(u),1500);
+}
+document.getElementById("npy").onclick=()=>{
+  if(!lastResult)return;
+  const {z,w,h,seed}=lastResult;
+  let hdr=`{'descr': '<f4', 'fortran_order': False, 'shape': (${h}, ${w}), }`;
+  const total=10+hdr.length+1, pad=(64-(total%64))%64;
+  hdr=hdr+" ".repeat(pad)+"\n";
+  const buf=new ArrayBuffer(10+hdr.length+z.byteLength), dv=new DataView(buf);
+  dv.setUint8(0,0x93); "NUMPY".split("").forEach((c,i)=>dv.setUint8(1+i,c.charCodeAt(0)));
+  dv.setUint8(6,1); dv.setUint8(7,0); dv.setUint16(8,hdr.length,true);
+  for(let i=0;i<hdr.length;i++) dv.setUint8(10+i,hdr.charCodeAt(i));
+  new Float32Array(buf,10+hdr.length).set(z);
+  download(new Blob([buf],{type:"application/octet-stream"}), `terrain_seed${String(seed).padStart(3,"0")}_${w}.npy`);
+};
+document.getElementById("png").onclick=()=>{
+  renderer.render(scene,camera);
+  canvas.toBlob(b=>{ if(b) download(b, `terrain_seed${lastResult?lastResult.seed:0}.png`); });
+};
+document.getElementById("reset").onclick=()=>{
+  SPEC.forEach(s=>{ inputs[s.key].value=s.def; document.getElementById("v_"+s.key).textContent=fmt(s,s.def); });
+  requestCompute();
+};
+
+/* =====================================================================
+   6) GO
+   ===================================================================== */
+resize();
+updateCam();
+requestCompute();
+</script>
+</body>
+</html>
